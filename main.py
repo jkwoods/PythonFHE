@@ -372,7 +372,7 @@ class Pk(object):
     return final
 
 
-#fuck around
+#tests
 print("check")
 
 pk = Pk()

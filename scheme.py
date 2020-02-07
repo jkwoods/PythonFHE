@@ -1,11 +1,16 @@
 #from dask.distributed import Client
 from dask import delayed
+from dask import bag
 import random
 import sympy
 from functools import reduce 
 import math
 from fractions import Fraction
 from itertools import islice
+
+#TODO: doubly delay data for large inputs (bc hash)
+#TODO: don't delay w/in delayed functions
+#TODO: best practices w/in key generation
 
 def QuotientNear(a,b):
   "Gives the nearest integer to a/b"
@@ -241,8 +246,10 @@ class Pk(object):
     self.l = 10
     self.log = 3 #math.log2(l)
 
-    self.p = [random_prime(2**(self.eta-1), 2**self.eta) for i in range(self.l)] #fix TODO ?????
-    self.pi = reduce((lambda x, y: x * y), self.p) #product of p
+    p_delayed = [delayed(random_prime)(2**(self.eta-1), 2**self.eta) for i in range(self.l)]
+    self.p = bag.from_delayed(p_delayed, npartitions=self.l)
+    self.pi = self.p.fold(lambda x, y: x * y)
+    #self.pi = reduce((lambda x, y: x * y), self.p) #product of p
 
     self.q0 = (2**self.gam)
     while (self.q0 > (2**self.gam)//self.pi):
@@ -250,10 +257,13 @@ class Pk(object):
       self.q0prime2 = random_prime(0, 2**(self.lam**2))
       self.q0 = self.q0prime1*self.q0prime2
     self.x0=self.pi*self.q0
-    
-    self.x = PRIntegersDelta.encrypt(self,[0 for i in range(self.tau)],self.rhoi-1,0)
-    self.xi = PRIntegersDelta.encrypt(self,[0 for i in range(self.l)],self.rho,1)
-    self.ii = PRIntegersDelta.encrypt(self,[0 for i in range(self.l)],self.rho,2)
+
+    x_delayed = delayed(PRIntegersDelta.encrypt)(self,[0 for i in range(self.tau)],self.rhoi-1,0)    
+    self.x = bag.from_delayed(x_delayed, npartitions=self.tau)
+    xi_delayed = delayed(PRIntegersDelta.encrypt)(self,[0 for i in range(self.l)],self.rho,1)
+    self.xi = bag.from_delayed(xi_delayed, npartitions=self.l)
+    ii_delayed = delayed(PRIntegersDelta.encrypt)(self,[0 for i in range(self.l)],self.rho,2)
+    self.ii = bag.from_delayed(ii_delayed, npartitions=self.l)
    
     self.B=self.Theta//self.theta
 
@@ -284,27 +294,36 @@ class Pk(object):
       for j in range(self.l):
         self.verts[i][j] = self.s[j][i]
 
-    self.u = PRIntegersU.encrypt(self)
+    u_delayed = delayed(PRIntegersU.encrypt)(self)
+    self.u = bag.from_delayed(u_delayed, npartitions=theta)
 
-    self.o = PRIntegersDelta.encrypt(self,[0 for i in range(self.Theta)],self.rho,3)
+    o_delayed = delayed(PRIntegersDelta.encrypt)(self,[0 for i in range(self.Theta)],self.rho,3)
+    self.o = bag.from_delayed(o_delayed, npartitions=theta) #TODO make sure these are lists or whatever (fix recrypt)
 
+    #self.olist = list(self.o)
 
-    self.olist = list(self.o)
+  def encrypt(self,m_array): #vector in {0,1}^l
+    b_delayed = [delayed(random_element, pure=False)(-2**self.alpha,2**self.alpha) for i in range(self.tau)]
+    bi_delayed= [delayed(random_element, pure=False)(-2**self.alphai,2**self.alphai) for i in range(self.l)]
 
-  def encrypt(self,m): #vector in {0,1}^l
-    b = [random_element(-2**self.alphai,2**self.alpha) for i in range(self.tau)]
-    bi= [random_element(-2**self.alphai,2**self.alphai) for i in range(self.l)] #shud be alpha i instead
+    b = bag.from_delayed(b_delayed, npartitions=self.tau) #TODO how choose good partitions
+    bi = bag.from_delayed(bi_delayed, npartitions=self.l)
 
-    sums=sum([mj*xij for mj,xij in zip(m,self.xi)])+sum([bij*iij for bij,iij in zip(bi,self.ii)])+sum([bj*xj for bj,xj in zip(b,self.x)])
-    #sums=delayed(sum)([mj*xij for mj,xij in zip(m,self.xi)])+delayed(sum)([bij*iij for bij,iij in zip(bi,self.ii)])+delayed(sum)([bj*xj for bj,xj in zip(b,self.x)])
+    m = bag.from_sequence(m_array, npartitions=self.l)
+    m_xi = (bag.zip(m,xi)).starmap(mult)
+    bi_ii = (bag.zip(bi,ii)).starmap(mult)
+    b_x = (bag.zip(b,x)).starmap(mult)
 
+    sums= (bag.concat([m_xi,bi_ii,b_x])).fold(add)
+    c = modNear(sums.compute(),self.x0) #computed before final step but idk if theres anything to do about that
 
-    return modNear(sums,self.x0)
+    return c
 
   def decrypt(self,c):
-    return [mod(modNear(c,self.p[i]),2) for i in range(self.l)]
+    m = [delayed(mod)(modNear(c,self.p[i]),2) for i in range(self.l)]
+    return [mi.compute() for i in range(self.l)]
 
-  def decrypt_squashed(self,c):
+  def decrypt_squashed(self,c): # don't worry about optimizing, this is only for checking
     y = [Fraction(ui)/Fraction(2**self.kap) for ui in self.u]
     z = [modNear(round((Fraction(c)*yi),4),2) for yi in y]
 
@@ -316,10 +335,10 @@ class Pk(object):
       m[j] = mod(int(round(sums)),2) ^ mod(c,2)
     return (m)
 
-  def noise(self,c): #maybe?? shud prolly check this shit
+  def noise(self,c): #maybe?
     return modNear(c,self.pi)
 
-  def add(self,c1,c2):
+  def add(self,c1,c2): #TODO split mod?
     return mod(c1+c2,self.x0)
 
   def sub(self,c1,c2):
@@ -333,24 +352,31 @@ class Pk(object):
 
   def recrypt(self,c):
     #"expand"
-    y = [Fraction(ui)/Fraction(2**self.kap) for ui in self.u]
-    z = [mod(round((Fraction(c)*yi),4),2) for yi in y]#adjust bits of precision
+    y_delayed = [Fraction(ui)/Fraction(2**self.kap) for ui in self.u] #TODO add delays in here
+    y = bag.from_delayed(y_delayed, npartitions=theta)
+
+    z = y.map(lambda x: mod(round((Fraction(c)*x),4),2))
+    #z = [mod(round((Fraction(c)*yi),4),2) for yi in y]#adjust bits of precision
     
-    adjz = [int(round(zi*16)) for zi in z]
+    adjust_z = z.map(lambda x: int(round(x*16)))
+    #adjz = [int(round(zi*16)) for zi in z]
 
     #put z in binary arrays
-    zbin = [toBinary(zi,self.n+1) for zi in adjz]
+    binary_z = adjust_z.map(lambda x: toBinary(x,self.n+1))
+    #zbin = [delay(toBinary)(zi,self.n+1) for zi in adjz]
    
-    sec = self.olist
-   
-    li = [arraymult(ski,cei) for ski,cei in zip(sec,zbin)]
+    sec = bag.from_sequence(self.olist)
+    li = (bag.zip(sec,binary_z)).starmap(arraymult)
+    #li = [delay(arraymult)(ski,cei) for ski,cei in zip(sec,zbin)]
 
-    Q_adds = [0 for i in range(self.n+1)]
-    Q_adds2 = [0 for i in range(self.n+1)]
 
-    for t in range(self.Theta):
-      Q_adds = sumBinary(Q_adds,li[t])
-      Q_adds = [mod(qa,self.x0) for qa in Q_adds]
+    #Q_adds = [0 for i in range(self.n+1)]
+    #li.compute()
+    #for t in range(self.Theta):
+    #  Q_adds = sumBinary(Q_adds,li[t])
+    #  Q_adds = [mod(qa,self.x0) for qa in Q_adds]
+
+    Q_adds = li.fold(sumBinary).compute()
 
     rounded = Q_adds[-1] + Q_adds[-2] #"round"
  

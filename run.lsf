@@ -19,7 +19,7 @@ date
 
 echo PYTHON SEQ TOY
 #echo BENCHMARK: 4 threads
-jsrun -n 1 -a 1 -c 1 -r 1 -l CPU-CPU -d packed -b packed:1 ./fhe
+jsrun -n 1 -a 1 -c 1 -r 1 -l CPU-CPU -d packed -b packed:1 python main.py
 #echo BENCHMARK: 8 threads
 #jsrun -n 1 -a 1 -c 2 -r 1 -l CPU-CPU -d packed -b packed:2 ./fhe
 #echo BENCHMARK: 16 threads

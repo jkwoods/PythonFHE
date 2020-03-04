@@ -173,21 +173,32 @@ def make_u_front(pk,seed):
   return u[:pk.l]
 
 class Pk(object):
-  def __init__(self):
+  def __init__(self, key_size):
     self.lam = 12
     self.rho = 26 #p
-    self.rhoi = self.rho # + self.lam
     self.eta = 1988 #(n)
     self.gam = 147456 #y
     self.Theta = 150 #O
-    self.theta = 15 #0
-    self.n = 4 #ceil(log2(theta+1))
-    self.kap = self.gam + self.eta + 2
     self.alpha = 936
-    self.alphai = self.alpha#??
     self.tau = 188
     self.l = 10
-    self.log = 3 #math.log2(l)
+    if (key_size==0):
+        print("Making toy key")
+        self.lam = 42
+        self.rho = 26;
+        self.eta = 988;
+        self.gam = 290000;
+        self.Theta = 150;
+        self.alpha = 936;
+        self.tau = 188;
+        self.l = 10;
+ 
+    self.alphai = self.lam + self.alpha
+    self.rhoi = self.lam + self.alpha
+    self.n = 4;
+    self.kap = 64*(self.gam//64+1)-1
+    self.log = round(math.log2(self.l))
+    self.theta = self.Theta//self.l
 
     self.p = [random_prime(2**(self.eta-1), 2**self.eta) for i in range(self.l)] #fix TODO ?????
     self.pi = reduce((lambda x, y: x * y), self.p) #product of p

@@ -1,0 +1,45 @@
+#!/bin/bash
+
+#BSUB -P GEN010
+#BSUB -W 01:00
+#BSUB -nnodes 1
+#BSUB -q batch
+#BSUB -J fhetestpy
+#BSUB -o fhetest_out.%J
+#BSUB -e fhetest_err.%J
+
+module load gcc
+module load python
+
+cd $MEMBERWORK/gen010/python
+cp /ccs/proj/gen119/woods/PythonFHE/main.py .
+cp /ccs/proj/gen119/woods/PythonFHE/scheme.py .
+
+date
+
+echo PYTHON SEQ TOY
+#echo BENCHMARK: 4 threads
+jsrun -n 1 -a 1 -c 1 -r 1 -l CPU-CPU -d packed -b packed:1 ./fhe
+#echo BENCHMARK: 8 threads
+#jsrun -n 1 -a 1 -c 2 -r 1 -l CPU-CPU -d packed -b packed:2 ./fhe
+#echo BENCHMARK: 16 threads
+#jsrun -n 1 -a 1 -c 4 -r 1 -l CPU-CPU -d packed -b packed:4 ./fhe
+#echo BENCHMARK: 32 threads
+#jsrun -n 1 -a 1 -c 8 -r 1 -l CPU-CPU -d packed -b packed:8 ./fhe
+#echo BENCHMARK: 64 threads
+#jsrun -n 1 -a 1 -c 16 -r 1 -l CPU-CPU -d packed -b packed:16 ./fhe
+#echo BENCHMARK: 84 threads
+#jsrun -n 1 -a 1 -c 21 -r 1 -l CPU-CPU -d packed -b packed:21 ./fhe
+#echo BENCHMARK: 128 threads
+#jsrun -n 1 -a 1 -c 32 -r 1 -l CPU-CPU -d packed -b packed:32 ./fhe
+#echo BENCHMARK: 168 threads
+#jsrun -n 1 -a 1 -c 42 -r 1 -l CPU-CPU -d packed -b packed:42 ./fhe
+#echo BENCHMARK: 168 threads
+#jsrun -n 1 -a 1 -c 42 -r 1 -l CPU-CPU -d packed -b packed:42 ./fhe
+#echo BENCHMARK: 168 threads
+#jsrun -n 1 -a 1 -c 42 -r 1 -l CPU-CPU -d packed -b packed:42 ./fhe
+
+echo DONE
+date
+
+rm main.py scheme.py

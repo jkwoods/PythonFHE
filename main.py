@@ -3,10 +3,10 @@ from timeit import default_timer as timer
 
 #test
 
-pk = scheme.Pk(0)
+pk = scheme.Pk(2)
 
 start = timer()
-pk = scheme.Pk(0)
+pk = scheme.Pk(2)
 end = timer()
 print("Key Time = ") 
 print(end - start)
@@ -32,7 +32,7 @@ c11 = scheme.Ciphertext.encrypt(pk, [1,1,1,1,1,1,1,1,1,1])
 c00 = scheme.Ciphertext.encrypt(pk, [0,1,0,1,0,1,0,1,0,1])
 
 ca = c11*c00
-
+ca.recrypt()
 start = timer()
 ca.recrypt()
 end = timer()

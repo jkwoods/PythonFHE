@@ -185,13 +185,43 @@ class Pk(object):
     if (key_size==0):
         print("Making toy key")
         self.lam = 42
-        self.rho = 26;
-        self.eta = 988;
-        self.gam = 290000;
-        self.Theta = 150;
-        self.alpha = 936;
-        self.tau = 188;
-        self.l = 10;
+        self.rho = 26
+        self.eta = 988
+        self.gam = 290000
+        self.Theta = 150
+        self.alpha = 936
+        self.tau = 188
+        self.l = 10
+    elif(key_size==1):
+        print("making small key")
+        self.lam = 52
+        self.rho = 41
+        self.eta = 1558
+        self.gam = 1600000
+        self.Theta = 555
+        self.alpha = 1476
+        self.tau = 661
+        self.l = 37
+    elif (key_size==2):
+        print("making medium key")
+        self.lam = 62
+        self.rho = 56
+        self.eta = 2128
+        self.gam = 8500000
+        self.Theta = 2070
+        self.alpha = 2016
+        self.tau = 2410
+        self. l = 138
+    elif (size == 3):
+        self.lam = 72;
+        self.rho = 71;
+        self.eta = 2698;
+        self.gam = 39000000;
+        self.Theta = 7965;
+        self.alpha = 2556;
+        self.tau = 8713;
+        self.l = 531;
+
  
     self.alphai = self.lam + self.alpha
     self.rhoi = self.lam + self.alpha

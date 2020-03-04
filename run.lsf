@@ -11,13 +11,13 @@
 module load gcc
 module load python
 
-cd $MEMBERWORK/gen010/python
+cd $MEMBERWORK/gen010/python/medium
 cp /ccs/proj/gen119/woods/PythonFHE/main.py .
 cp /ccs/proj/gen119/woods/PythonFHE/scheme.py .
 
 date
 
-echo PYTHON SEQ TOY
+echo PYTHON SEQ MEDIUM
 #echo BENCHMARK: 4 threads
 jsrun -n 1 -a 1 -c 1 -r 1 -l CPU-CPU -d packed -b packed:1 python main.py
 #echo BENCHMARK: 8 threads

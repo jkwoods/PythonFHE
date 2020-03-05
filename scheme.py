@@ -1,16 +1,13 @@
-#from dask.distributed import Client
 from dask import delayed
 from dask import bag
+import dask
+import numpy as np
 import random
 import sympy
 from functools import reduce 
 import math
 from fractions import Fraction
 from itertools import islice
-
-#TODO: doubly delay data for large inputs (bc hash)
-#TODO: don't delay w/in delayed functions
-#TODO: best practices w/in key generation
 
 def QuotientNear(a,b):
   "Gives the nearest integer to a/b"
@@ -52,9 +49,6 @@ def sumBinary(a,b):
   c.append(a[-1]+b[-1]+carry)
   return c
 
-def xorBinary(a,b):
-  return [ai+bi for ai,bi in zip(a,b)]
-
 def toBinary(x,l):
   "Converts a positive integer x into binary with l digits"
   return digits(x+2**l)[:-1]
@@ -76,13 +70,19 @@ def mul_inv(a, b):
     if x1 < 0: x1 += b0
     return x1
 
-def CRT(n, a): #chinese remiander thm
+def CRTsub(ai,ni,prod):
+  p = (prod // ni)
+  return ai * mul_inv(p, ni) * p
+
+
+def CRT(n, a, pi): #chinese remiander thm; both inputs = bag
     sum = 0
-    prod = reduce(lambda a, b: a*b, n)
-    for n_i, a_i in zip(n, a):
-        p = prod // n_i
-        sum += a_i * mul_inv(p, n_i) * p
-    return sum % prod
+    #prod = n.fold(lambda x, y: x*y)
+
+    to_sum = (bag.zip(a,n)).starmap(lambda ai,ni: CRTsub(ai,ni,pi))
+    summed = to_sum.fold(lambda x,y: x+y)
+
+    return bag.compute(summed)[0] % pi
 
 def kd(i,j):
   if (i == j):
@@ -94,176 +94,167 @@ def arraymult(c,a):
   return [c*int(xi) for xi in a]
 
 class Ciphertext():
-  def __init__(self,val_,pk_,degree_=1):
-    self.val,self.pk,self.degree=val_,pk_,degree_
+  def __init__(self,val_,pk_):
+    self.val,self.pk=val_,pk_
 
   @staticmethod
   def encrypt(pk,m):
     return Ciphertext(pk.encrypt(m),pk)
 
-  def noise(self):
-    return self.pk.noise(self.val)
-
   def decrypt(self):
     m=self.pk.decrypt(self.val)
     return m
 
-  def decrypt_squashed(self):
-    return self.pk.decrypt_squashed(self.val)
-
   def __add__(self,x):
-    return self.__class__(self.pk.add(self.val,x.val),self.pk,max(self.degree,x.degree))
+    return self.__class__(self.pk.add(self.val,x.val),self.pk)
 
   def __mul__(self,x):
-    return self.__class__(self.pk.mult(self.val,x.val),self.pk,self.degree+x.degree)
+    return self.__class__(self.pk.mult(self.val,x.val),self.pk)
 
   def scalmult(self,x):
     if isinstance(x,list):
+      print("multing list")
 
-      return [self.__class__(self.val*int(xi),self.pk,self.degree) for xi in x]
+      return [self.__class__(self.val*int(xi),self.pk) for xi in x]
     else:
-      return self.__class__(self.val*x,self.pk,self.degree)
+      return self.__class__(self.val*x,self.pk)
 
   def recrypt(self):
     return Ciphertext(self.pk.recrypt(self.val),self.pk)
 
-class PRIntegers: #generates X
-  "A list of pseudo-random integers."
-  def __init__(self,x0,ell):
-    self.x0,self.ell=x0,ell
-    self.li=[None for i in range(self.ell)]
-    self.se=set_random_seed(0)
-
-  def __getitem__(self,i):
-    return self.li[i]
-    
-  def __setitem__(self,i,val):
-    self.li[i]=val
-
-  def __iter__(self):
-    set_random_seed(self.se)
-    for i in range(self.ell):
-      a=random_element(0,self.x0)
-      if self.li[i]!=None:
-        yield self.li[i]
-      else:
-        yield a
+def make_pri(x0,ell,seed): #generates X, CANNOT DELAY, order matters
+    set_random_seed(seed)
+    chi = [random_element(0,x0) for i in range(ell)]
     set_random_seed(0)
+    return chi
 
-class PRIntegersDelta(PRIntegers):
-  """A list of pseudo-random integers, with their delta corrections"""
-  def __iter__(self):
-    return (c-d for c,d in zip(PRIntegers.__iter__(self),self.delta)) #changed from paper
+def make_deltas(pk,lenv,rho,seed,cr):
+  pr        = bag.from_sequence(make_pri(pk.x0,lenv,seed))
+ 
+  r         = [[random_element(-2**rho+1,2**rho) for i in range(pk.l)] for j in range(lenv)]
 
-  def ciphertexts(self,pk):
-    return (Ciphertext(cd,pk) for cd in self)
+  E         = bag.from_sequence([random_element(0,(2**(pk.lam+pk.log+(pk.l*pk.eta)))//pk.pi) for i in range(lenv)]) #added from paper
 
-  @staticmethod
-  def encrypt(pk,v,rho,cr):
-    pr=PRIntegersDelta(pk.x0,len(v))
-    pr.r=[[random_element(-2**rho+1,2**rho) for i in range(pk.l)] for j in range(len(v))]
-    E=[random_element(0,(2**(pk.lam+pk.log+(pk.l*pk.eta)))//pk.pi) for i in range(len(v))] #added from paper
-    pr.delta=[0 for i in range(len(v))]
+  if (cr == 0):#x
+  
+    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([ri for ri in r[j]]).map(lambda ri: 2*ri),pk.pi) for j in range(lenv)])
+  elif (cr == 1):#xi
+    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+kd(i,j) for ri,i in zip(r[j],range(pk.l))]),pk.pi) for j in range(lenv)])
+  elif (cr == 2):#ii
+    crts= bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+(kd(i,j)*(2**(pk.rhoi+1))) for ri,i in zip(r[j],range(pk.l))]),pk.pi) for j in range(lenv)])
+  else: #o
+    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+si for ri,si in zip(r[j],pk.verts[j])]),pk.pi) for j in range(lenv)])
+  
+  temp= pr.map(lambda xi: xi % pk.pi)
+  delta = (bag.zip(temp,E,crts)).starmap(lambda te,ei,crti: te+(ei*pk.pi)-crti)
+  
+  return delta
 
-    if (cr == 0):#x
-      crts = [CRT(pk.p,[2*ri for ri in pr.r[j]]) for j in range(len(v))]
-    elif (cr == 1):#xi
-      crts = [CRT(pk.p,[2*ri+kd(i,j) for ri,i in zip(pr.r[j],range(pk.l))]) for j in range(len(v))]
-    elif (cr == 2):#ii
-      crts = [CRT(pk.p,[2*ri+(kd(i,j)*(2**(pk.rhoi+1))) for ri,i in zip(pr.r[j],range(pk.l))]) for j in range(len(v))]
-    else: #o
-      
-      crts = [CRT(pk.p,[2*ri+si for ri,si in zip(pr.r[j],pk.verts[j])]) for j in range(len(v))]
+def make_u_front(pk,seed):
+  u = make_pri(2**(pk.kap+1),pk.Theta,seed) #not bag
 
-    temp=[mod(Xi,pk.pi) for Xi in PRIntegers.__iter__(pr)]
-    pr.delta=[te+(ei*pk.pi)-crti for te,ei,crti in zip(temp,E,crts)] #changed from paper
-    return pr
+  n=0
+  x_p = pk.p.map(lambda i: (2**pk.kap)//i).compute()
 
-class PRIntegersU(PRIntegers):
-  """A list of pseudo-random integers, frankencode crap"""
-  def __iter__(self):
-    return (PRIntegers.__iter__(self)) #changed from paper
+  for j in range(pk.l):
+    xpj = x_p[j]
 
-  def ciphertexts(self,pk):
-    return (Ciphertext(cd,pk) for cd in self)
+    su = [delayed(lambda x,y: x*y)(pk.s[j][i],u[i]) for i in range(pk.Theta)]
+    
+    v = n
+    n = n+1
 
-  @staticmethod
-  def encrypt(pk):
-    pr=PRIntegersU(2**(pk.kap+1),pk.Theta) #u draft
-    u = [ui for ui in PRIntegers.__iter__(pr)]
+    #change corresponding u
+    su[v] = 0
+    sumv = sum(su).compute()
+    k1 = 2**(pk.kap+1)
+    nu = k1 - sumv + xpj
+    while (nu < 0) or (nu >= k1):
+      if (nu < 0):
+        nu = nu+k1
+      elif ():
+        nu = nu-k1
 
-    for j in range(pk.l):
-      s1indexs = []
-      xpj = (2**pk.kap)//pk.p[j]
+    u[v] = nu
 
-      su = [0 for i in range(pk.Theta)]
-      for i in range(pk.Theta):
-        su[i] = pk.s[j][i]*u[i]
-        if (pk.s[j][i] == 1): s1indexs.append(i)
-
-      sumt = sum(su)
-      sumt = mod(sumt, 2**(pk.kap+1))
-
-      while(sumt != xpj):
-        #pick random 1 in s
-        v = random.choice(s1indexs)
-
-        #change corresponding u
-        su[v] = 0
-        sumv = sum(su)
-        k1 = 2**(pk.kap+1)
-        nu = k1 - sumv + xpj
-        while (nu < 0) or (nu >= k1):
-          if (nu < 0):
-            nu = nu+k1
-          elif ():
-            nu = nu-k1
-
-        u[v] = nu
-        #check
-        for i in range(pk.Theta):
-          su[i] = pk.s[j][i]*u[i]
-        
-        sumt = sum(su)
-        sumt = mod(sumt, 2**(pk.kap+1))
-
-    return u
+  return u[:pk.l]
 
 class Pk(object):
-  def __init__(self):
+  def __init__(self, key_size):
     self.lam = 12
     self.rho = 26 #p
-    self.rhoi = self.rho # + self.lam
     self.eta = 1988 #(n)
     self.gam = 147456 #y
     self.Theta = 150 #O
-    self.theta = 15 #0
-    self.n = 4 #ceil(log2(theta+1))
-    self.kap = self.gam + self.eta + 2
     self.alpha = 936
-    self.alphai = self.alpha#??
     self.tau = 188
     self.l = 10
-    self.log = 3 #math.log2(l)
+    if (key_size==0):
+        print("Making toy key")
+        self.lam = 42
+        self.rho = 26
+        self.eta = 988
+        self.gam = 290000
+        self.Theta = 150
+        self.alpha = 936
+        self.tau = 188
+        self.l = 10
+    elif(key_size==1):
+        print("making small key")
+        self.lam = 52
+        self.rho = 41
+        self.eta = 1558
+        self.gam = 1600000
+        self.Theta = 555
+        self.alpha = 1476
+        self.tau = 661
+        self.l = 37
+    elif (key_size==2):
+        print("making medium key")
+        self.lam = 62
+        self.rho = 56
+        self.eta = 2128
+        self.gam = 8500000
+        self.Theta = 2070
+        self.alpha = 2016
+        self.tau = 2410
+        self. l = 138
+    elif (size == 3):
+        self.lam = 72;
+        self.rho = 71;
+        self.eta = 2698;
+        self.gam = 39000000;
+        self.Theta = 7965;
+        self.alpha = 2556;
+        self.tau = 8713;
+        self.l = 531;
 
-    p_delayed = [delayed(random_prime)(2**(self.eta-1), 2**self.eta) for i in range(self.l)]
-    self.p = bag.from_delayed(p_delayed, npartitions=self.l)
-    self.pi = self.p.fold(lambda x, y: x * y)
-    #self.pi = reduce((lambda x, y: x * y), self.p) #product of p
+ 
+    self.alphai = self.lam + self.alpha
+    self.rhoi = self.lam + self.alpha
+    self.n = 4;
+    self.kap = 64*(self.gam//64+1)-1
+    self.log = round(math.log2(self.l))
+    self.theta = self.Theta//self.l
+
+    self.p = bag.from_sequence([random_prime(2**(self.eta-1), 2**self.eta) for i in range(self.l)])
+    self.pi = self.p.fold(lambda x, y: x * y).compute()
 
     self.q0 = (2**self.gam)
     while (self.q0 > (2**self.gam)//self.pi):
-      self.q0prime1 = random_prime(0, 2**(self.lam**2))
-      self.q0prime2 = random_prime(0, 2**(self.lam**2))
-      self.q0 = self.q0prime1*self.q0prime2
+      q0prime1 = delayed(random_prime)(0, 2**(self.lam**2))#delayed
+      q0prime2 = delayed(random_prime)(0, 2**(self.lam**2))#delayed
+      q0_temp = q0prime1*q0prime2
+      self.q0 = q0_temp.compute()
     self.x0=self.pi*self.q0
+    
+    self.x_seed = random.randint(2, 2**30)
+    self.xi_seed = random.randint(2, 2**30)
+    self.ii_seed = random.randint(2, 2**30)
 
-    x_delayed = delayed(PRIntegersDelta.encrypt)(self,[0 for i in range(self.tau)],self.rhoi-1,0)    
-    self.x = bag.from_delayed(x_delayed, npartitions=self.tau)
-    xi_delayed = delayed(PRIntegersDelta.encrypt)(self,[0 for i in range(self.l)],self.rho,1)
-    self.xi = bag.from_delayed(xi_delayed, npartitions=self.l)
-    ii_delayed = delayed(PRIntegersDelta.encrypt)(self,[0 for i in range(self.l)],self.rho,2)
-    self.ii = bag.from_delayed(ii_delayed, npartitions=self.l)
+    self.x_deltas = make_deltas(self,self.tau,self.rhoi-1,self.x_seed,0) #returns bag
+    self.xi_deltas = make_deltas(self,self.l,self.rho,self.xi_seed,1)
+    self.ii_deltas = make_deltas(self,self.l,self.rho,self.ii_seed,2)
    
     self.B=self.Theta//self.theta
 
@@ -294,36 +285,34 @@ class Pk(object):
       for j in range(self.l):
         self.verts[i][j] = self.s[j][i]
 
-    u_delayed = delayed(PRIntegersU.encrypt)(self)
-    self.u = bag.from_delayed(u_delayed, npartitions=theta)
+    self.u_seed = random.randint(2, 2**30)
+    self.o_seed = random.randint(2, 2**30)
 
-    o_delayed = delayed(PRIntegersDelta.encrypt)(self,[0 for i in range(self.Theta)],self.rho,3)
-    self.o = bag.from_delayed(o_delayed, npartitions=theta) #TODO make sure these are lists or whatever (fix recrypt)
+    self.u_front = bag.from_sequence(make_u_front(self, self.u_seed))
 
-    #self.olist = list(self.o)
+    self.o_deltas = make_deltas(self,self.Theta,self.rho,self.o_seed,3)
 
   def encrypt(self,m_array): #vector in {0,1}^l
-    b_delayed = [delayed(random_element, pure=False)(-2**self.alpha,2**self.alpha) for i in range(self.tau)]
-    bi_delayed= [delayed(random_element, pure=False)(-2**self.alphai,2**self.alphai) for i in range(self.l)]
+    b   = bag.from_sequence([random_element(-2**self.alpha,2**self.alpha) for i in range(self.tau)])
+    bi  = bag.from_sequence([random_element(-2**self.alphai,2**self.alphai) for i in range(self.l)])
 
-    b = bag.from_delayed(b_delayed, npartitions=self.tau) #TODO how choose good partitions
-    bi = bag.from_delayed(bi_delayed, npartitions=self.l)
+    x   = bag.zip(bag.from_sequence(make_pri(self.x0,self.tau,self.x_seed)),self.x_deltas).starmap(lambda c,d: c-d)
+    xi  = bag.zip(bag.from_sequence(make_pri(self.x0,self.l,self.xi_seed)),self.xi_deltas).starmap(lambda c,d: c-d)
+    ii  = bag.zip(bag.from_sequence(make_pri(self.x0,self.l,self.ii_seed)),self.ii_deltas).starmap(lambda c,d: c-d)
 
-    m = bag.from_sequence(m_array, npartitions=self.l)
-    m_xi = (bag.zip(m,xi)).starmap(mult)
-    bi_ii = (bag.zip(bi,ii)).starmap(mult)
-    b_x = (bag.zip(b,x)).starmap(mult)
+    m = bag.from_sequence(m_array)
+    m_xi = (bag.zip(m,xi)).starmap(lambda x,y: x*y)
+    bi_ii = (bag.zip(bi,ii)).starmap(lambda x,y: x*y)
+    b_x = (bag.zip(b,x)).starmap(lambda x,y: x*y)
 
-    sums= (bag.concat([m_xi,bi_ii,b_x])).fold(add)
-    c = modNear(sums.compute(),self.x0) #computed before final step but idk if theres anything to do about that
-
-    return c
+    sums= (bag.concat([m_xi,bi_ii,b_x])).fold(lambda x,y: x+y)
+    return modNear(sums.compute(),self.x0)
 
   def decrypt(self,c):
-    m = [delayed(mod)(modNear(c,self.p[i]),2) for i in range(self.l)]
-    return [mi.compute() for i in range(self.l)]
+    m = p.map(lambda pi: mod(modNear(c,self.pi),2))
+    return m.compute()
 
-  def decrypt_squashed(self,c): # don't worry about optimizing, this is only for checking
+  def decrypt_squashed(self,c):
     y = [Fraction(ui)/Fraction(2**self.kap) for ui in self.u]
     z = [modNear(round((Fraction(c)*yi),4),2) for yi in y]
 
@@ -335,10 +324,7 @@ class Pk(object):
       m[j] = mod(int(round(sums)),2) ^ mod(c,2)
     return (m)
 
-  def noise(self,c): #maybe?
-    return modNear(c,self.pi)
-
-  def add(self,c1,c2): #TODO split mod?
+  def add(self,c1,c2):
     return mod(c1+c2,self.x0)
 
   def sub(self,c1,c2):
@@ -351,32 +337,31 @@ class Pk(object):
     return "<Pk with rho=%d, eta=%d, gam=%d>" % (self.rho,self.eta,self.gam) 
 
   def recrypt(self,c):
-    #"expand"
-    y_delayed = [Fraction(ui)/Fraction(2**self.kap) for ui in self.u] #TODO add delays in here
-    y = bag.from_delayed(y_delayed, npartitions=theta)
+    #get u
+    u_draft = make_pri(2**(self.kap+1),self.Theta,self.u_seed)
+    u_end = bag.from_sequence(u_draft[self.l:])
+    u = bag.concat([self.u_front,u_end])
 
-    z = y.map(lambda x: mod(round((Fraction(c)*x),4),2))
-    #z = [mod(round((Fraction(c)*yi),4),2) for yi in y]#adjust bits of precision
-    
-    adjust_z = z.map(lambda x: int(round(x*16)))
-    #adjz = [int(round(zi*16)) for zi in z]
+    #"expand"
+    y = u.map(lambda ui: Fraction(ui)/Fraction(2**self.kap))
+    z = y.map(lambda yi: mod(round((Fraction(c)*yi),4),2))
+    adjz = z.map(lambda zi: int(round(zi*16)))
 
     #put z in binary arrays
-    binary_z = adjust_z.map(lambda x: toBinary(x,self.n+1))
-    #zbin = [delay(toBinary)(zi,self.n+1) for zi in adjz]
-   
-    sec = bag.from_sequence(self.olist)
-    li = (bag.zip(sec,binary_z)).starmap(arraymult)
-    #li = [delay(arraymult)(ski,cei) for ski,cei in zip(sec,zbin)]
+    zbin = adjz.map(lambda zi: toBinary(zi,self.n+1))
 
+    #get o
+    o = bag.zip(bag.from_sequence(make_pri(self.x0,self.Theta,self.o_seed)),self.o_deltas).starmap(lambda c,d: c-d)
 
-    #Q_adds = [0 for i in range(self.n+1)]
-    #li.compute()
-    #for t in range(self.Theta):
-    #  Q_adds = sumBinary(Q_adds,li[t])
-    #  Q_adds = [mod(qa,self.x0) for qa in Q_adds]
+    o_z = (bag.zip(o,zbin)).starmap(lambda oi,zi: arraymult(oi,zi))
+    li = bag.compute(o_z)[0]
 
-    Q_adds = li.fold(sumBinary).compute()
+    #this can be changed later
+    Q_adds = [0 for i in range(self.n+1)]
+
+    for t in range(self.Theta):
+      Q_adds = sumBinary(Q_adds,li[t])
+      Q_adds = [mod(qa,self.x0) for qa in Q_adds]
 
     rounded = Q_adds[-1] + Q_adds[-2] #"round"
  

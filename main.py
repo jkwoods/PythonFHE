@@ -1,41 +1,45 @@
 import scheme
+from timeit import default_timer as timer
 
+#test
 
-#fuck around
-print("check")
-pk = scheme.Pk()
-print("pk made")
-
+start = timer()
+pk = scheme.Pk(0)
+end = timer()
+print("Key Time = ") 
+print(end - start)
 
 c1 = scheme.Ciphertext.encrypt(pk, [0,0,0,0,0,0,0,0,0,1])
-c0 = scheme.Ciphertext.encrypt(pk, [0,0,0,0,0,0,0,0,0,0])
+start = timer()
+c0 = scheme.Ciphertext.encrypt(pk, [0,1,0,1,0,1,0,1,0,1])
+end = timer()
+print("Encode Time = ")
+print(end - start)
 
-print(c1.decrypt())
-  
+c1.decrypt()
+start = timer()
+c0.decrypt()
+end = timer()
+print("Decode Time = ")
+print(end - start)
+
+
 print((c1.recrypt()).decrypt())
 
+c11 = scheme.Ciphertext.encrypt(pk, [1,1,1,1,1,1,1,1,1,1])
+c00 = scheme.Ciphertext.encrypt(pk, [0,1,0,1,0,1,0,1,0,1])
 
+ca = c11*c00
+ca.recrypt()
+start = timer()
+ca.recrypt()
+end = timer()
+print("Recode Time = ")
+print(end - start)
 
+cb = c11+c00
+print(cb.decrypt())
+  
+print((ca.recrypt()).decrypt())
 
-
-
-  #ii = list(pk.ii.__iter__())
-#xi = list(pk.xi.__iter__())
-#x = list(pk.x.__iter__())
-
-#print(pk.eta >= (pk.alphai+pk.rhoi+1+pk.log))
-#print(pk.eta >= (pk.lam*(math.log(pk.lam)**2))*pk.rho)
-
-#for i in ii:
-#  if (i//pk.pi > pk.q0):
-#    print("alert")
-
-#for i in xi:
-#  if (i//pk.pi > pk.q0):
-#    print("alert")
-
-#for i in x:
-#  if (i//pk.pi > pk.q0):
-#    print("alert")
-
-#print("all clear")
+print((c1*c1).decrypt())

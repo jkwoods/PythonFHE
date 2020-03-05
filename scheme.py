@@ -135,6 +135,7 @@ def make_deltas(pk,lenv,rho,seed,cr):
 
   E         = bag.from_sequence([random_element(0,(2**(pk.lam+pk.log+(pk.l*pk.eta)))//pk.pi) for i in range(lenv)]) #added from paper
 
+
   if (cr == 0):#x
   
     crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([ri for ri in r[j]]).map(lambda ri: 2*ri),pk.pi) for j in range(lenv)])
@@ -144,7 +145,7 @@ def make_deltas(pk,lenv,rho,seed,cr):
     crts= bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+(kd(i,j)*(2**(pk.rhoi+1))) for ri,i in zip(r[j],range(pk.l))]),pk.pi) for j in range(lenv)])
   else: #o
     crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+si for ri,si in zip(r[j],pk.verts[j])]),pk.pi) for j in range(lenv)])
-  
+
   temp= pr.map(lambda xi: xi % pk.pi)
   delta = (bag.zip(temp,E,crts)).starmap(lambda te,ei,crti: te+(ei*pk.pi)-crti)
   
@@ -179,55 +180,66 @@ def make_u_front(pk,seed):
 
   return u[:pk.l]
 
+
 class Pk(object):
   def __init__(self, key_size):
-    self.lam = 12
-    self.rho = 26 #p
-    self.eta = 1988 #(n)
-    self.gam = 147456 #y
-    self.Theta = 150 #O
+    self.lam = 42
+    self.rho = 26
+    self.eta = 988
+    self.gam = 290000
+    self.Theta = 150
     self.alpha = 936
     self.tau = 188
     self.l = 10
-    if (key_size==0):
-        print("Making toy key")
-        self.lam = 42
-        self.rho = 26
-        self.eta = 988
-        self.gam = 290000
-        self.Theta = 150
-        self.alpha = 936
-        self.tau = 188
-        self.l = 10
+    if (key_size==-1):
+      print("correctness key test")
+      self.lam = 12
+      self.rho = 26 #p
+      self.eta = 1988 #(n)
+      self.gam = 147456 #y
+      self.Theta = 150 #O
+      self.alpha = 936
+      self.tau = 188
+      self.l = 10
+    elif (key_size==0):
+      print("Making toy key")
+      self.lam = 42
+      self.rho = 26
+      self.eta = 988
+      self.gam = 290000
+      self.Theta = 150
+      self.alpha = 936
+      self.tau = 188
+      self.l = 10
     elif(key_size==1):
-        print("making small key")
-        self.lam = 52
-        self.rho = 41
-        self.eta = 1558
-        self.gam = 1600000
-        self.Theta = 555
-        self.alpha = 1476
-        self.tau = 661
-        self.l = 37
+      print("making small key")
+      self.lam = 52
+      self.rho = 41
+      self.eta = 1558
+      self.gam = 1600000
+      self.Theta = 555
+      self.alpha = 1476
+      self.tau = 661
+      self.l = 37
     elif (key_size==2):
-        print("making medium key")
-        self.lam = 62
-        self.rho = 56
-        self.eta = 2128
-        self.gam = 8500000
-        self.Theta = 2070
-        self.alpha = 2016
-        self.tau = 2410
-        self. l = 138
+      print("making medium key")
+      self.lam = 62
+      self.rho = 56
+      self.eta = 2128
+      self.gam = 8500000
+      self.Theta = 2070
+      self.alpha = 2016
+      self.tau = 2410
+      self. l = 138
     elif (size == 3):
-        self.lam = 72;
-        self.rho = 71;
-        self.eta = 2698;
-        self.gam = 39000000;
-        self.Theta = 7965;
-        self.alpha = 2556;
-        self.tau = 8713;
-        self.l = 531;
+      self.lam = 72;
+      self.rho = 71;
+      self.eta = 2698;
+      self.gam = 39000000;
+      self.Theta = 7965;
+      self.alpha = 2556;
+      self.tau = 8713;
+      self.l = 531;
 
  
     self.alphai = self.lam + self.alpha
@@ -237,6 +249,9 @@ class Pk(object):
     self.log = round(math.log2(self.l))
     self.theta = self.Theta//self.l
 
+    self.rhoi = self.rho # + self.lam
+    self.alphai = self.alpha#??
+    
     self.p = bag.from_sequence([random_prime(2**(self.eta-1), 2**self.eta) for i in range(self.l)])
     self.pi = self.p.fold(lambda x, y: x * y).compute()
 
@@ -255,7 +270,7 @@ class Pk(object):
     self.x_deltas = make_deltas(self,self.tau,self.rhoi-1,self.x_seed,0) #returns bag
     self.xi_deltas = make_deltas(self,self.l,self.rho,self.xi_seed,1)
     self.ii_deltas = make_deltas(self,self.l,self.rho,self.ii_seed,2)
-   
+
     self.B=self.Theta//self.theta
 
     self.s = [[0 for j in range(self.Theta)] for k in range(self.l)]
@@ -291,7 +306,7 @@ class Pk(object):
     self.u_front = bag.from_sequence(make_u_front(self, self.u_seed))
 
     self.o_deltas = make_deltas(self,self.Theta,self.rho,self.o_seed,3)
-
+   
   def encrypt(self,m_array): #vector in {0,1}^l
     b   = bag.from_sequence([random_element(-2**self.alpha,2**self.alpha) for i in range(self.tau)])
     bi  = bag.from_sequence([random_element(-2**self.alphai,2**self.alphai) for i in range(self.l)])
@@ -309,8 +324,10 @@ class Pk(object):
     return modNear(sums.compute(),self.x0)
 
   def decrypt(self,c):
-    m = p.map(lambda pi: mod(modNear(c,self.pi),2))
+    pbag = bag.from_sequence(self.p)  
+    m = pbag.map(lambda pi: mod(modNear(c,pi),2))
     return m.compute()
+    
 
   def decrypt_squashed(self,c):
     y = [Fraction(ui)/Fraction(2**self.kap) for ui in self.u]
@@ -342,7 +359,7 @@ class Pk(object):
     u_end = bag.from_sequence(u_draft[self.l:])
     u = bag.concat([self.u_front,u_end])
 
-    #"expand"
+    #"expand" #TODO CHANGE FRACTION TO RATIONAL
     y = u.map(lambda ui: Fraction(ui)/Fraction(2**self.kap))
     z = y.map(lambda yi: mod(round((Fraction(c)*yi),4),2))
     adjz = z.map(lambda zi: int(round(zi*16)))
@@ -354,17 +371,26 @@ class Pk(object):
     o = bag.zip(bag.from_sequence(make_pri(self.x0,self.Theta,self.o_seed)),self.o_deltas).starmap(lambda c,d: c-d)
 
     o_z = (bag.zip(o,zbin)).starmap(lambda oi,zi: arraymult(oi,zi))
-    li = bag.compute(o_z)[0]
+   
+    Q_adds = o_z.fold(lambda q,r: sumBinary(q,r))
 
-    #this can be changed later
+    Q_sum = Q_adds.compute()
+
+    rounded = Q_sum[-1] + Q_sum[-2] #"round"
+ 
+    final = rounded + (c & 1)
+
+    '''
+    li = bag.compute(o_z)[0]
     Q_adds = [0 for i in range(self.n+1)]
 
     for t in range(self.Theta):
       Q_adds = sumBinary(Q_adds,li[t])
-      Q_adds = [mod(qa,self.x0) for qa in Q_adds]
+      #Q_adds = [mod(qa,self.x0) for qa in Q_adds]
 
     rounded = Q_adds[-1] + Q_adds[-2] #"round"
  
     final = rounded + (c & 1)
+    '''
 
     return final

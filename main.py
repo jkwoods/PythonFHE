@@ -3,10 +3,8 @@ from timeit import default_timer as timer
 
 #test
 
-pk = scheme.Pk(2)
-
 start = timer()
-pk = scheme.Pk(2)
+pk = scheme.Pk(-1)
 end = timer()
 print("Key Time = ") 
 print(end - start)

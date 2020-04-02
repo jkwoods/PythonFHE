@@ -128,27 +128,41 @@ def make_pri(x0,ell,seed): #generates X, CANNOT DELAY, order matters
     set_random_seed(0)
     return chi
 
-def make_deltas(pk,lenv,rho,seed,cr):
-  pr        = bag.from_sequence(make_pri(pk.x0,lenv,seed))
- 
+def make_deltas(pk,lenv,rho,seed,cr,partitions):
+  print("enter make_deltas; partition arg =")
+  print(partitions)
+
+  pr        = bag.from_sequence(make_pri(pk.x0,lenv,seed), npartitions=partitions)
+  print("pr partitions=")
+  print(pr.npartitions)
+
   r         = [[random_element(-2**rho+1,2**rho) for i in range(pk.l)] for j in range(lenv)]
 
-  E         = bag.from_sequence([random_element(0,(2**(pk.lam+pk.log+(pk.l*pk.eta)))//pk.pi) for i in range(lenv)]) #added from paper
+  E         = bag.from_sequence([random_element(0,(2**(pk.lam+pk.log+(pk.l*pk.eta)))//pk.pi) for i in range(lenv)], npartitions=partitions) #added from paper
 
 
   if (cr == 0):#x
   
-    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([ri for ri in r[j]]).map(lambda ri: 2*ri),pk.pi) for j in range(lenv)])
+    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([ri for ri in r[j]], npartitions=partitions).map(lambda ri: 2*ri),pk.pi) for j in range(lenv)], npartitions=partitions)
   elif (cr == 1):#xi
-    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+kd(i,j) for ri,i in zip(r[j],range(pk.l))]),pk.pi) for j in range(lenv)])
+    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+kd(i,j) for ri,i in zip(r[j],range(pk.l))], npartitions=partitions),pk.pi) for j in range(lenv)], npartitions=partitions)
   elif (cr == 2):#ii
-    crts= bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+(kd(i,j)*(2**(pk.rhoi+1))) for ri,i in zip(r[j],range(pk.l))]),pk.pi) for j in range(lenv)])
+    crts= bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+(kd(i,j)*(2**(pk.rhoi+1))) for ri,i in zip(r[j],range(pk.l))], npartitions=partitions),pk.pi) for j in range(lenv)], npartitions=partitions)
   else: #o
-    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+si for ri,si in zip(r[j],pk.verts[j])]),pk.pi) for j in range(lenv)])
+    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+si for ri,si in zip(r[j],pk.verts[j])], npartitions=partitions),pk.pi) for j in range(lenv)], npartitions=partitions)
+
+
 
   temp= pr.map(lambda xi: xi % pk.pi)
   delta = (bag.zip(temp,E,crts)).starmap(lambda te,ei,crti: te+(ei*pk.pi)-crti)
   
+  print("crts partitions=")
+  print(crts.npartitions)
+  print("delta partitions=")
+  print(delta.npartitions)
+
+
+  print("leave make_deltas")
   return delta
 
 def make_u_front(pk,seed):
@@ -182,7 +196,7 @@ def make_u_front(pk,seed):
 
 
 class Pk(object):
-  def __init__(self, key_size):
+  def __init__(self, key_size, partitions):
     self.lam = 42
     self.rho = 26
     self.eta = 988
@@ -191,6 +205,9 @@ class Pk(object):
     self.alpha = 936
     self.tau = 188
     self.l = 10
+
+    self.partitions = partitions
+
     if (key_size==-1):
       print("correctness key test")
       self.lam = 12
@@ -252,7 +269,7 @@ class Pk(object):
     self.rhoi = self.rho # + self.lam
     self.alphai = self.alpha#??
     
-    self.p = bag.from_sequence([random_prime(2**(self.eta-1), 2**self.eta) for i in range(self.l)])
+    self.p = bag.from_sequence([random_prime(2**(self.eta-1), 2**self.eta) for i in range(self.l)], npartitions=self.partitions)
     self.pi = self.p.fold(lambda x, y: x * y).compute()
 
     self.q0 = (2**self.gam)
@@ -267,9 +284,12 @@ class Pk(object):
     self.xi_seed = random.randint(2, 2**30)
     self.ii_seed = random.randint(2, 2**30)
 
-    self.x_deltas = make_deltas(self,self.tau,self.rhoi-1,self.x_seed,0) #returns bag
-    self.xi_deltas = make_deltas(self,self.l,self.rho,self.xi_seed,1)
-    self.ii_deltas = make_deltas(self,self.l,self.rho,self.ii_seed,2)
+    self.x_deltas = make_deltas(self,self.tau,self.rhoi-1,self.x_seed,0,self.partitions) #returns bag
+    self.xi_deltas = make_deltas(self,self.l,self.rho,self.xi_seed,1,self.partitions)
+    self.ii_deltas = make_deltas(self,self.l,self.rho,self.ii_seed,2,self.partitions)
+
+    print("xi_deltas partitions=")
+    print(self.xi_deltas.npartitions)
 
     self.B=self.Theta//self.theta
 
@@ -303,19 +323,25 @@ class Pk(object):
     self.u_seed = random.randint(2, 2**30)
     self.o_seed = random.randint(2, 2**30)
 
-    self.u_front = bag.from_sequence(make_u_front(self, self.u_seed))
+    self.u_front = bag.from_sequence(make_u_front(self, self.u_seed), npartitions=self.partitions)
 
-    self.o_deltas = make_deltas(self,self.Theta,self.rho,self.o_seed,3)
+    self.o_deltas = make_deltas(self,self.Theta,self.rho,self.o_seed,3,self.partitions)
    
   def encrypt(self,m_array): #vector in {0,1}^l
-    b   = bag.from_sequence([random_element(-2**self.alpha,2**self.alpha) for i in range(self.tau)])
-    bi  = bag.from_sequence([random_element(-2**self.alphai,2**self.alphai) for i in range(self.l)])
+    b   = bag.from_sequence([random_element(-2**self.alpha,2**self.alpha) for i in range(self.tau)], npartitions=self.partitions)
+    bi  = bag.from_sequence([random_element(-2**self.alphai,2**self.alphai) for i in range(self.l)], npartitions=self.partitions)
 
-    x   = bag.zip(bag.from_sequence(make_pri(self.x0,self.tau,self.x_seed)),self.x_deltas).starmap(lambda c,d: c-d)
-    xi  = bag.zip(bag.from_sequence(make_pri(self.x0,self.l,self.xi_seed)),self.xi_deltas).starmap(lambda c,d: c-d)
-    ii  = bag.zip(bag.from_sequence(make_pri(self.x0,self.l,self.ii_seed)),self.ii_deltas).starmap(lambda c,d: c-d)
+    x   = bag.zip(bag.from_sequence(make_pri(self.x0,self.tau,self.x_seed), npartitions=self.partitions),self.x_deltas).starmap(lambda c,d: c-d)
+    xi  = bag.zip(bag.from_sequence(make_pri(self.x0,self.l,self.xi_seed), npartitions=self.partitions),self.xi_deltas).starmap(lambda c,d: c-d)
+    ii  = bag.zip(bag.from_sequence(make_pri(self.x0,self.l,self.ii_seed), npartitions=self.partitions),self.ii_deltas).starmap(lambda c,d: c-d)
 
-    m = bag.from_sequence(m_array)
+    m = bag.from_sequence(m_array, npartitions=self.partitions)
+
+    print("m partitions=")
+    print(m.npartitions)
+    print("xi partitions=")
+    print(xi.npartitions)
+
     m_xi = (bag.zip(m,xi)).starmap(lambda x,y: x*y)
     bi_ii = (bag.zip(bi,ii)).starmap(lambda x,y: x*y)
     b_x = (bag.zip(b,x)).starmap(lambda x,y: x*y)
@@ -324,7 +350,7 @@ class Pk(object):
     return modNear(sums.compute(),self.x0)
 
   def decrypt(self,c):
-    pbag = bag.from_sequence(self.p)  
+    pbag = bag.from_sequence(self.p, npartitions=self.partitions)
     m = pbag.map(lambda pi: mod(modNear(c,pi),2))
     return m.compute()
     
@@ -358,17 +384,31 @@ class Pk(object):
     u_draft = make_pri(2**(self.kap+1),self.Theta,self.u_seed)
     u_end = bag.from_sequence(u_draft[self.l:])
     u = bag.concat([self.u_front,u_end])
+    u = u.repartition(self.partitions)
+    print("u part")
+    print(u.npartitions)
+
 
     #"expand" #TODO CHANGE FRACTION TO RATIONAL
     y = u.map(lambda ui: Fraction(ui)/Fraction(2**self.kap))
+    print("y part")
+    print(y.npartitions)
+
     z = y.map(lambda yi: mod(round((Fraction(c)*yi),4),2))
+    print("z part")
+    print(z.npartitions)
+
     adjz = z.map(lambda zi: int(round(zi*16)))
+    print("adjz part")
+    print(adjz.npartitions)
 
     #put z in binary arrays
     zbin = adjz.map(lambda zi: toBinary(zi,self.n+1))
+    print("zbin part")
+    print(zbin.npartitions)
 
     #get o
-    o = bag.zip(bag.from_sequence(make_pri(self.x0,self.Theta,self.o_seed)),self.o_deltas).starmap(lambda c,d: c-d)
+    o = bag.zip(bag.from_sequence(make_pri(self.x0,self.Theta,self.o_seed), npartitions=self.partitions),self.o_deltas).starmap(lambda c,d: c-d)
 
     o_z = (bag.zip(o,zbin)).starmap(lambda oi,zi: arraymult(oi,zi))
    

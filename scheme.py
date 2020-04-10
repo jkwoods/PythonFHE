@@ -13,10 +13,12 @@ def QuotientNear(a,b):
   "Gives the nearest integer to a/b"
   return (2*a+b)//(2*b)
 
+@dask.delayed
 def modNear(a,b):
   "Computes a mod b with a \in ]-b/2,b/2]"
   return a-b*QuotientNear(a,b)
 
+@dask.delayed
 def mod(c, p):
   return c % p
 
@@ -49,6 +51,7 @@ def sumBinary(a,b):
   c.append(a[-1]+b[-1]+carry)
   return c
 
+@dask.delayed
 def toBinary(x,l):
   "Converts a positive integer x into binary with l digits"
   return digits(x+2**l)[:-1]
@@ -70,19 +73,14 @@ def mul_inv(a, b):
     if x1 < 0: x1 += b0
     return x1
 
-def CRTsub(ai,ni,prod):
-  p = (prod // ni)
-  return ai * mul_inv(p, ni) * p
-
-
-def CRT(n, a, pi): #chinese remiander thm; both inputs = bag
+@dask.delayed
+def CRT(n, a): #chinese remiander thm
     sum = 0
-    #prod = n.fold(lambda x, y: x*y)
-
-    to_sum = (bag.zip(a,n)).starmap(lambda ai,ni: CRTsub(ai,ni,pi))
-    summed = to_sum.fold(lambda x,y: x+y)
-
-    return bag.compute(summed)[0] % pi
+    prod = reduce(lambda a, b: a*b, n)
+    for n_i, a_i in zip(n, a):
+        p = prod // n_i
+        sum += a_i * mul_inv(p, n_i) * p
+    return sum % prod
 
 def kd(i,j):
   if (i == j):
@@ -90,8 +88,23 @@ def kd(i,j):
   else:
     return 0
 
+@dask.delayed
 def arraymult(c,a):
   return [c*int(xi) for xi in a]
+
+@dask.delayed
+def frac1(ui,kap):
+  return Fraction(ui)/Fraction(2**kap)
+
+@dask.delayed
+def frac2(c,yi):
+  return round((Fraction(c)*yi),4)
+  
+@dask.delayed
+def a_round(zi):
+  return int(round(zi*16))
+
+
 
 class Ciphertext():
   def __init__(self,val_,pk_):
@@ -129,45 +142,48 @@ def make_pri(x0,ell,seed): #generates X, CANNOT DELAY, order matters
     return chi
 
 def make_deltas(pk,lenv,rho,seed,cr):
-  pr        = bag.from_sequence(make_pri(pk.x0,lenv,seed))
+  pr=make_pri(pk.x0,lenv,seed)
  
-  r         = [[random_element(-2**rho+1,2**rho) for i in range(pk.l)] for j in range(lenv)]
-
-  E         = bag.from_sequence([random_element(0,(2**(pk.lam+pk.log+(pk.l*pk.eta)))//pk.pi) for i in range(lenv)]) #added from paper
-
+  e_help = (2**(pk.lam+pk.log+(pk.l*pk.eta)))//pk.pi
+  r=[[delayed(random_element)(-2**rho+1,2**rho) for i in range(pk.l)] for j in range(lenv)]
+  E=[delayed(random_element)(0,e_help) for i in range(lenv)] #added from paper
+  delta=[0 for i in range(lenv)]
 
   if (cr == 0):#x
-  
-    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([ri for ri in r[j]]).map(lambda ri: 2*ri),pk.pi) for j in range(lenv)])
+    crts = [CRT(pk.p,[2*ri for ri in r[j]]) for j in range(lenv)]
   elif (cr == 1):#xi
-    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+kd(i,j) for ri,i in zip(r[j],range(pk.l))]),pk.pi) for j in range(lenv)])
+    crts = [CRT(pk.p,[2*ri+kd(i,j) for ri,i in zip(r[j],range(pk.l))]) for j in range(lenv)]
   elif (cr == 2):#ii
-    crts= bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+(kd(i,j)*(2**(pk.rhoi+1))) for ri,i in zip(r[j],range(pk.l))]),pk.pi) for j in range(lenv)])
+    crts = [CRT(pk.p,[2*ri+(kd(i,j)*(2**(pk.rhoi+1))) for ri,i in zip(r[j],range(pk.l))]) for j in range(lenv)]
   else: #o
-    crts = bag.from_sequence([CRT(pk.p,bag.from_sequence([2*ri+si for ri,si in zip(r[j],pk.verts[j])]),pk.pi) for j in range(lenv)])
+    crts = [CRT(pk.p,[2*ri+si for ri,si in zip(r[j],pk.verts[j])]) for j in range(lenv)]
 
-  temp= pr.map(lambda xi: xi % pk.pi)
-  delta = (bag.zip(temp,E,crts)).starmap(lambda te,ei,crti: te+(ei*pk.pi)-crti)
-  
-  return delta
+  temp=[mod(Xi,pk.pi) for Xi in pr]
+  delta=[te+(ei*pk.pi)-crti for te,ei,crti in zip(temp,E,crts)] #changed from paper
+
+  return [delta[i].compute() for i in range(lenv)]
 
 def make_u_front(pk,seed):
-  u = make_pri(2**(pk.kap+1),pk.Theta,seed) #not bag
+  pr=make_pri(2**(pk.kap+1),pk.Theta,seed) #u draft
+  u = pr
 
   n=0
-  x_p = pk.p.map(lambda i: (2**pk.kap)//i).compute()
-
   for j in range(pk.l):
-    xpj = x_p[j]
+    xpj = (2**pk.kap)//pk.p[j]
 
-    su = [delayed(lambda x,y: x*y)(pk.s[j][i],u[i]) for i in range(pk.Theta)]
+    su = [0 for i in range(pk.Theta)]
+    for i in range(pk.Theta):
+      su[i] = pk.s[j][i]*u[i]
     
+    sumt = sum(su)
+    sumt = mod(sumt, 2**(pk.kap+1))
+
     v = n
     n = n+1
 
     #change corresponding u
     su[v] = 0
-    sumv = sum(su).compute()
+    sumv = sum(su)
     k1 = 2**(pk.kap+1)
     nu = k1 - sumv + xpj
     while (nu < 0) or (nu >= k1):
@@ -191,6 +207,7 @@ class Pk(object):
     self.alpha = 936
     self.tau = 188
     self.l = 10
+
     if (key_size==-1):
       print("correctness key test")
       self.lam = 12
@@ -252,8 +269,8 @@ class Pk(object):
     self.rhoi = self.rho # + self.lam
     self.alphai = self.alpha#??
     
-    self.p = bag.from_sequence([random_prime(2**(self.eta-1), 2**self.eta) for i in range(self.l)])
-    self.pi = self.p.fold(lambda x, y: x * y).compute()
+    self.p = [random_prime(2**(self.eta-1), 2**self.eta) for i in range(self.l)] #fix TODO ?????
+    self.pi = reduce((lambda x, y: x * y), self.p) #product of p
 
     self.q0 = (2**self.gam)
     while (self.q0 > (2**self.gam)//self.pi):
@@ -267,7 +284,7 @@ class Pk(object):
     self.xi_seed = random.randint(2, 2**30)
     self.ii_seed = random.randint(2, 2**30)
 
-    self.x_deltas = make_deltas(self,self.tau,self.rhoi-1,self.x_seed,0) #returns bag
+    self.x_deltas = make_deltas(self,self.tau,self.rhoi-1,self.x_seed,0) #delayed
     self.xi_deltas = make_deltas(self,self.l,self.rho,self.xi_seed,1)
     self.ii_deltas = make_deltas(self,self.l,self.rho,self.ii_seed,2)
 
@@ -303,32 +320,27 @@ class Pk(object):
     self.u_seed = random.randint(2, 2**30)
     self.o_seed = random.randint(2, 2**30)
 
-    self.u_front = bag.from_sequence(make_u_front(self, self.u_seed))
+    self.u_front = make_u_front(self, self.u_seed)
 
     self.o_deltas = make_deltas(self,self.Theta,self.rho,self.o_seed,3)
    
-  def encrypt(self,m_array): #vector in {0,1}^l
-    b   = bag.from_sequence([random_element(-2**self.alpha,2**self.alpha) for i in range(self.tau)])
-    bi  = bag.from_sequence([random_element(-2**self.alphai,2**self.alphai) for i in range(self.l)])
+  def encrypt(self,m): #vector in {0,1}^l
+    b = [delayed(random_element)(-2**self.alpha,2**self.alpha) for i in range(self.tau)]
+    bi= [delayed(random_element)(-2**self.alphai,2**self.alphai) for i in range(self.l)]
 
-    x   = bag.zip(bag.from_sequence(make_pri(self.x0,self.tau,self.x_seed)),self.x_deltas).starmap(lambda c,d: c-d)
-    xi  = bag.zip(bag.from_sequence(make_pri(self.x0,self.l,self.xi_seed)),self.xi_deltas).starmap(lambda c,d: c-d)
-    ii  = bag.zip(bag.from_sequence(make_pri(self.x0,self.l,self.ii_seed)),self.ii_deltas).starmap(lambda c,d: c-d)
+    x = [c-d for c,d in zip(make_pri(self.x0,self.tau,self.x_seed),self.x_deltas)]
+    xi= [c-d for c,d in zip(make_pri(self.x0,self.l,self.xi_seed),self.xi_deltas)]
+    ii= [c-d for c,d in zip(make_pri(self.x0,self.l,self.ii_seed),self.ii_deltas)]
 
-    m = bag.from_sequence(m_array)
-    m_xi = (bag.zip(m,xi)).starmap(lambda x,y: x*y)
-    bi_ii = (bag.zip(bi,ii)).starmap(lambda x,y: x*y)
-    b_x = (bag.zip(b,x)).starmap(lambda x,y: x*y)
+    sums=sum([delayed(mj*xij) for mj,xij in zip(m,xi)])+sum([delayed(bij*iij) for bij,iij in zip(bi,ii)])+sum([delayed(bj*xj) for bj,xj in zip(b,x)])
+    rmn = modNear(sums,self.x0)
 
-    sums= (bag.concat([m_xi,bi_ii,b_x])).fold(lambda x,y: x+y)
-    return modNear(sums.compute(),self.x0)
+    return rmn.compute()
 
   def decrypt(self,c):
-    pbag = bag.from_sequence(self.p)  
-    m = pbag.map(lambda pi: mod(modNear(c,pi),2))
-    return m.compute()
+    rd = [mod(modNear(c,self.p[i]),2) for i in range(self.l)]
+    return [rd[i].compute() for i in range(self.l)]
     
-
   def decrypt_squashed(self,c):
     y = [Fraction(ui)/Fraction(2**self.kap) for ui in self.u]
     z = [modNear(round((Fraction(c)*yi),4),2) for yi in y]
@@ -356,41 +368,36 @@ class Pk(object):
   def recrypt(self,c):
     #get u
     u_draft = make_pri(2**(self.kap+1),self.Theta,self.u_seed)
-    u_end = bag.from_sequence(u_draft[self.l:])
-    u = bag.concat([self.u_front,u_end])
+    u = self.u_front+u_draft[self.l:]
 
-    #"expand" #TODO CHANGE FRACTION TO RATIONAL
-    y = u.map(lambda ui: Fraction(ui)/Fraction(2**self.kap))
-    z = y.map(lambda yi: mod(round((Fraction(c)*yi),4),2))
-    adjz = z.map(lambda zi: int(round(zi*16)))
+    #"expand"
+    y = [frac1(ui,self.kap) for ui in u]
+    z = [mod(frac2(c,yi),2) for yi in y]#adjust bits of precision
+    
+    adjz = [a_round(zi) for zi in z]
 
     #put z in binary arrays
-    zbin = adjz.map(lambda zi: toBinary(zi,self.n+1))
+    zbin = [toBinary(zi,self.n+1) for zi in adjz]
+   
 
     #get o
-    o = bag.zip(bag.from_sequence(make_pri(self.x0,self.Theta,self.o_seed)),self.o_deltas).starmap(lambda c,d: c-d)
-
-    o_z = (bag.zip(o,zbin)).starmap(lambda oi,zi: arraymult(oi,zi))
+    o = [c-d for c,d in zip(make_pri(self.x0,self.Theta,self.o_seed),self.o_deltas)]
    
-    Q_adds = o_z.fold(lambda q,r: sumBinary(q,r))
+    li = [arraymult(ski,cei) for ski,cei in zip(o,zbin)]
 
-    Q_sum = Q_adds.compute()
-
-    rounded = Q_sum[-1] + Q_sum[-2] #"round"
- 
-    final = rounded + (c & 1)
-
-    '''
-    li = bag.compute(o_z)[0]
     Q_adds = [0 for i in range(self.n+1)]
 
     for t in range(self.Theta):
       Q_adds = sumBinary(Q_adds,li[t])
-      #Q_adds = [mod(qa,self.x0) for qa in Q_adds]
+      Q_adds = [mod(qa,self.x0) for qa in Q_adds]
 
-    rounded = Q_adds[-1] + Q_adds[-2] #"round"
+    rounded = Q_adds[-1].compute() + Q_adds[-2].compute() #"round"
  
     final = rounded + (c & 1)
-    '''
 
     return final
+
+
+
+
+

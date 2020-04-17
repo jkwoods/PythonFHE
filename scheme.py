@@ -50,11 +50,27 @@ def sumBinary(a,b):
   c.append(a[-1]+b[-1]+carry)
   return c
 
+@dask.delayed
+def frac1(u,k):
+  return Fraction(u)/Fraction(2**k)
+
+@dask.delayed
+def frac2(c,y):
+  return mod(round((Fraction(c)*y),4),2)
+
+@dask.delayed
+def round3(zi):
+  return int(round(zi*16))
+
+@dask.delayed
 def toBinary(x,l):
   "Converts a positive integer x into binary with l digits"
-  return digits(x+2**l)[:-1]
+  if (x==32): return np.array([0]*l)
+
+  return np.array(digits(x+2**l)[:-1])
 
 def digits(x): #always binary
+
   le = list('{0:0b}'.format(x))
   le.reverse()
   return le
@@ -68,21 +84,15 @@ def mul_inv(a, b):
         q = a // b
         a, b = b, a%b
         x0, x1 = x1 - q * x0, x0
-        print(a)
-    print("not stuck while")
     if x1 < 0: x1 += b0
-    print("not stuck if")
     return x1
 
 def CRT(n, a, prod): #chinese remiander thm   #n = 1 d array, a = 2 d array 2b split, should return 1-day array
 
-  mul_array = n.map_blocks((lambda ni: mul_inv((prod // ni), n_i) * (prod // ni)), dtype=object) #1d
+  mul_array = n.map_blocks((lambda ni: mul_inv((prod // ni), ni) * (prod // ni)), dtype=object) #1d
 
   pre = mul_array.reshape(mul_array.shape[0],1)
   pre2 = da.transpose(pre)
-
-  print(pre2)
-  print(a)
 
   #a_p = da.multiply(pre2,a) #2d
   a_p = da.blockwise(operator.mul, 'ij', pre2, 'ij', a, 'ij', dtype=object)
@@ -226,7 +236,7 @@ def make_u_front(pk,seed):
 
     u[v] = nu
 
-  return da.from_array(u[:pk.l], chunks=1)
+  return u[:pk.l]
 
 
 class Pk(object):
@@ -302,17 +312,15 @@ class Pk(object):
     self.alphai = self.alpha#??
     
     self.p_unwrapped = [random_prime(2**(self.eta-1), 2**self.eta) for i in range(self.l)]
-    self.p = da.from_array(self.p_unwrapped, chunks=1) #fix TODO ?????
+    self.p = da.from_array(self.p_unwrapped, chunks=1).persist() #fix TODO ?????
     #self.pi = reduce((lambda x, y: x * y), self.p) #product of p
     self.pi = da.prod(self.p).compute()
-    print("p+pi")
 
     self.q0 = (2**self.gam)
     while (self.q0 > (2**self.gam)//self.pi):
       q0prime1 = delayed(random_prime)(0, 2**(self.lam**2))
       q0prime2 = delayed(random_prime)(0, 2**(self.lam**2))
       self.q0 = (q0prime1*q0prime2).compute()
-    print("q0")
 
     self.x0=self.pi*self.q0
 
@@ -322,14 +330,9 @@ class Pk(object):
 
     #TODO MOVE pre CRT calcualtions
 
-
-
-    self.x_deltas = make_deltas(self,self.tau,self.rhoi-1,self.x_seed,0) #dask array 
-    print("x deltas")
-    self.xi_deltas = make_deltas(self,self.l,self.rho,self.xi_seed,1)
-    print("xi deltas")
-    self.ii_deltas = make_deltas(self,self.l,self.rho,self.ii_seed,2)
-    print("ii deltas")
+    self.x_deltas = make_deltas(self,self.tau,self.rhoi-1,self.x_seed,0).persist() #dask array 
+    self.xi_deltas = make_deltas(self,self.l,self.rho,self.xi_seed,1).persist()
+    self.ii_deltas = make_deltas(self,self.l,self.rho,self.ii_seed,2).persist()
 
     self.B=self.Theta//self.theta
 
@@ -367,14 +370,14 @@ class Pk(object):
 
     self.u_front = make_u_front(self, self.u_seed) #make future TODO
 
-    self.o_deltas = make_deltas(self,self.Theta,self.rho,self.o_seed,3)
+    self.o_deltas = make_deltas(self,self.Theta,self.rho,self.o_seed,3).persist()
    
   def encrypt(self,m): #vector in {0,1}^l
     #b = [delayed(random_element)(-2**self.alpha,2**self.alpha) for i in range(self.tau)]
     #bi= [delayed(random_element)(-2**self.alphai,2**self.alphai) for i in range(self.l)]
 
     b = da.from_array([random_element(-2**self.alpha,2**self.alpha) for i in range(self.tau)], chunks=1)
-    bi = da.from_array([delayed(random_element)(-2**self.alphai,2**self.alphai) for i in range(self.l)], chunks=1)
+    bi = da.from_array([random_element(-2**self.alphai,2**self.alphai) for i in range(self.l)], chunks=1)
 
     #x = [c-d for c,d in zip(make_pri(self.x0,self.tau,self.x_seed),self.x_deltas)]
     #xi= [c-d for c,d in zip(make_pri(self.x0,self.l,self.xi_seed),self.xi_deltas)]
@@ -404,18 +407,26 @@ class Pk(object):
     #cut x into chunks, add everything up
     half = da.blockwise(operator.add, 'i', m_xi, 'i', bi_ii, 'i', dtype=object) #TODO check?
     r = self.tau//self.l
-    for i in range(r+1):
-      half = da.blockwise(operator.add, 'i', half, 'i', b_x[(i*self.l):((i*self.l)+self.l)], 'i', dtype=object) #TODO check?
+    #for i in range(r+1):
+    #  half = da.blockwise(operator.add, 'i', half, 'i', b_x[(i*self.l):((i*self.l)+self.l)], 'i', dtype=object) #TODO check?
 
-    big = half.compute()
+    big = sum(half.compute()) + sum(b_x.compute())
 
-    final = modNear(sum(big),self.x0)
+    final = modNear(big,self.x0)
 
     return final
 
   def decrypt(self,c):
-    rd = [mod(modNear(c,self.p[i]),2) for i in range(self.l)]
-    return dask.compute([rd[i] for i in range(self.l)])[0]
+    #c-pi*((2*c+pi)//(2*pi))
+    p_2 = self.p.map_blocks((lambda pi: pi * 2), dtype=object)
+    c_2_plus_p = self.p.map_blocks((lambda pi: (2*c)+pi), dtype=object)
+    qnear = da.blockwise(operator.floordiv, 'i', c_2_plus_p, 'i', p_2, 'i', dtype=object)
+    qnear_p = da.blockwise(operator.mul, 'i', qnear, 'i', self.p, 'i', dtype=object)
+    modresult = qnear_p.map_blocks((lambda pi: c-pi), dtype=object)
+    #modresult % 2 #TODO change to &?
+    result = modresult.map_blocks((lambda mi: mi % 2), dtype=object)
+    return result.compute()
+
     
   def decrypt_squashed(self,c):
     y = [Fraction(ui)/Fraction(2**self.kap) for ui in self.u]
@@ -443,32 +454,27 @@ class Pk(object):
 
   def recrypt(self,c):
     #get u
-    u_draft = da.from_array(make_pri(2**(self.kap+1),self.Theta,self.u_seed))
-    u = da.concatenate([self.u_front,(u_draft[self.l:])])
-    #u = self.u_front+u_draft[self.l:]
+    u_draft = make_pri(2**(self.kap+1),self.Theta,self.u_seed)
+    u = self.u_front+u_draft[self.l:]
 
     #"expand"
-    #y = [frac1(ui,self.kap) for ui in u]
-    #z = [mod(frac2(c,yi),2) for yi in y]#adjust bits of precision
-    
-    #adjz = [a_round(zi) for zi in z]
-
-    y = u.map_blocks((lambda ui: Fraction(ui)/Fraction(2**self.kap)), dtype=object)
-    z = y.map_blocks((lambda yi: mod(round((Fraction(c)*yi),4),2)), dtype=object)
-    adjz = z.map_blocks((lambda zi: int(round(zi*16))), dtype=object)
-
-    #put z in binary arrays
-    #zbin = [toBinary(zi,self.n+1) for zi in adjz]
-   
-    zbin = (((adjz[:,None] & (1 << np.arange(self.n+1)))) > 0).astype(int)
-
+    y = [frac1(ui,self.kap) for ui in u]
+    z = [frac2(c,yi) for yi in y]#adjust bits of precision
+    adjz = [round3(zi) for zi in z]
+    zbin = [toBinary(zi,self.n+1) for zi in adjz]
+    zcom = np.array(dask.compute(*zbin))
+    print("zbin computed")
     #get o
-    #o = [c-d for c,d in zip(make_pri(self.x0,self.Theta,self.o_seed),self.o_deltas)]
-    o = da.subtract((da.from_array(make_pri(self.x0,self.Theta,self.o_seed))),self.o_deltas)
 
+    o = da.blockwise(operator.sub, 'i', (da.from_array(make_pri(self.x0,self.Theta,self.o_seed), chunks=1)), 'i', self.o_deltas, 'i', dtype=object) #TODO check?
 
-    #li = [arraymult(ski,cei) for ski,cei in zip(o,zbin)] =======> array_mult=[ski*int(xi) for xi in cei]
-    li = da.multiply((o.reshape(o.shape[0]),1),zbin)
+    o1 = o.reshape(o.shape[0],1)
+    new_o = da.concatenate((o1,o1,o1,o1,o1), axis=1)
+    zarr = da.from_array(zcom, chunks=1)
+
+    print(new_o)
+    print(zarr)
+    li = da.blockwise(operator.mul, 'ij', new_o, 'ij', zarr, 'ij', dtype=object)
 
     Q_adds = [0 for i in range(self.n+1)]
 
@@ -476,13 +482,16 @@ class Pk(object):
       Q_adds = sumBinary(Q_adds,li[t])
 
       #Q_adds = [mod(qa,self.x0) for qa in Q_adds]
-      Q_adds = Q_adds.map_blocks((lambda qa: mod(qa,self.x0)), dtype=object)
+      #Q_adds = Q_adds.map_blocks((lambda qa: mod(qa,self.x0)), dtype=object)
 
     #Q_adds[-1].visualize(filename='halfRecrypt.svg')
     #a1, a2 = dask.compute()
 
-    rounded = Q_adds[-1] + Q_adds[-2] #"round"
+    dask.visualize(*Q_adds, filename='2halfRecrypt.svg')
+
+    Q_comp = dask.compute(Q_adds[-1],Q_adds[-2])
+    rounded = Q_comp[-1] + Q_comp[-2] #"round"
  
     final = rounded + (c & 1)
 
-    return final.compute()
+    return final

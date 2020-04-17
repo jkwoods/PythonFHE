@@ -37,6 +37,7 @@ def set_random_seed(seed): #if seed = 0, use rand and return it, else use seed
     random.seed(s)
   return s
 
+@dask.delayed
 def sumBinary(a,b):
   "Computes the sum of the binary vectors a and b, modulo 2^n where n is the length of the vectors a and b"
   c=[a[0]+b[0]]
@@ -107,6 +108,7 @@ def kd(i,j):
   else:
     return 0
 
+@dask.delayed
 def arraymult(c,a):
   return [c*int(xi) for xi in a]
 
@@ -462,36 +464,31 @@ class Pk(object):
     z = [frac2(c,yi) for yi in y]#adjust bits of precision
     adjz = [round3(zi) for zi in z]
     zbin = [toBinary(zi,self.n+1) for zi in adjz]
-    zcom = np.array(dask.compute(*zbin))
+    z_comp = np.array(dask.compute(*zbin))
     print("zbin computed")
     #get o
 
     o = da.blockwise(operator.sub, 'i', (da.from_array(make_pri(self.x0,self.Theta,self.o_seed), chunks=1)), 'i', self.o_deltas, 'i', dtype=object) #TODO check?
-
     o1 = o.reshape(o.shape[0],1)
-    new_o = da.concatenate((o1,o1,o1,o1,o1), axis=1)
-    zarr = da.from_array(zcom, chunks=1)
+    #new_o = da.concatenate((o1,o1,o1,o1,o1), axis=1)
+    #zarr = da.from_array(zcom, chunks=1)
 
-    print(new_o)
-    print(zarr)
-    li = da.blockwise(operator.mul, 'ij', new_o, 'ij', zarr, 'ij', dtype=object)
+    o_comp = dask.compute(*o1)
+
+    #li = da.blockwise(operator.mul, 'ij', new_o, 'ij', zarr, 'ij', dtype=object)
+
+    li = [arraymult(ski,cei) for ski,cei in zip(o_comp,z_comp)]
 
     Q_adds = [0 for i in range(self.n+1)]
 
     for t in range(self.Theta):
       Q_adds = sumBinary(Q_adds,li[t])
 
-      #Q_adds = [mod(qa,self.x0) for qa in Q_adds]
-      #Q_adds = Q_adds.map_blocks((lambda qa: mod(qa,self.x0)), dtype=object)
-
-    #Q_adds[-1].visualize(filename='halfRecrypt.svg')
-    #a1, a2 = dask.compute()
-
-    dask.visualize(*Q_adds, filename='2halfRecrypt.svg')
-
-    Q_comp = dask.compute(Q_adds[-1],Q_adds[-2])
-    rounded = Q_comp[-1] + Q_comp[-2] #"round"
+    rounded = Q_adds[-1] + Q_adds[-2] #"round"
  
     final = rounded + (c & 1)
+    final.visualize(filename='2halfRecrypt.svg')
 
-    return final
+    return final.compute()
+
+

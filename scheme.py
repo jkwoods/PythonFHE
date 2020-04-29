@@ -77,6 +77,7 @@ def digits(x): #always binary
   return le
 
 def mul_inv(a, b):
+
     b0 = b
     x0, x1 = 0, 1
     if b == 1: return 1
@@ -88,10 +89,14 @@ def mul_inv(a, b):
     if x1 < 0: x1 += b0
     return x1
 
-def CRT(n, a, prod): #chinese remiander thm   #n = 1 d array, a = 2 d array 2b split, should return 1-day array
+def CRT(n, a, prod, prod_div_array): #chinese remiander thm   #n = 1 d - array, a = 2 d rand array 2b split, should return 1-day array
 
-  mul_array = n.map_blocks((lambda ni: mul_inv((prod // ni), ni) * (prod // ni)), dtype=object) #1d
+  #mul_array = n.map_blocks((lambda ni: mul_inv((prod // ni), ni) * (prod // ni)), dtype=object) #1d
+  mul_array0 = []
+  for i in range(len(prod_div_array)):
+    mul_array0.append(mul_inv(prod_div_array[i], n[i]) * prod_div_array[i])
 
+  mul_array = da.from_array(mul_array0, chunks=1)
   pre = mul_array.reshape(mul_array.shape[0],1)
   pre2 = da.transpose(pre)
 
@@ -151,11 +156,16 @@ def make_deltas(pk,lenv,rho,seed,cr):
   pr=da.from_array(make_pri(pk.x0,lenv,seed), chunks=1)
  
   e_help = (2**(pk.lam+pk.log+(pk.l*pk.eta)))//pk.pi
-  #r=[[random_element(-2**rho+1,2**rho) for i in range(pk.l)] for j in range(lenv)]
-  #E=[random_element(0,e_help) for i in range(lenv)] #added from paper
   
-  r = da.random.randint(-2**rho+1,2**rho,size=(lenv, pk.l))
-  E = da.random.randint(0,e_help,size=lenv)
+  r0=[[delayed(random_element)(-2**rho+1,2**rho) for i in range(pk.l)] for j in range(lenv)]
+  E0=[delayed(random_element)(0,e_help) for i in range(lenv)] #added from paper
+  
+  r1 = dask.compute(*r0)
+  E1 = dask.compute(*E0)
+
+  r = da.from_array(r1, chunks=1)
+  E = da.from_array(E1, chunks=1)
+  
   kd_array = da.from_array([[kd(i,j) for i in range(pk.l)] for j in range(lenv)])
 
   #delta=[0 for i in range(lenv)]
@@ -163,7 +173,7 @@ def make_deltas(pk,lenv,rho,seed,cr):
   if (cr == 0):#x
     #crts = [CRT(pk.p,[2*ri for ri in r[j]]) for j in range(lenv)]
     r2 = r.map_blocks((lambda x: 2*x), dtype=object)
-    crts = CRT(pk.p,r2,pk.pi)
+    crts = CRT(pk.p_unwrapped,r2,pk.pi,pk.pdiv)
   elif (cr == 1):#xi
     #crts = [CRT(pk.p,[2*ri+kd(i,j) for ri,i in zip(r[j],range(pk.l))]) for j in range(lenv)]
     r2 = r.map_blocks((lambda x: 2*x), dtype=object)
@@ -171,7 +181,7 @@ def make_deltas(pk,lenv,rho,seed,cr):
     #r3 = da.add(r2,kd_array)
     r3 = da.blockwise(operator.add, 'ij', r2, 'ij', kd_array, 'ij', dtype=object)
     
-    crts = CRT(pk.p,r3,pk.pi)
+    crts = CRT(pk.p_unwrapped,r3,pk.pi,pk.pdiv)
   elif (cr == 2):#ii
     #crts = [CRT(pk.p,[2*ri+(kd(i,j)*(2**(pk.rhoi+1))) for ri,i in zip(r[j],range(pk.l))]) for j in range(lenv)]
     r2 = r.map_blocks((lambda x: 2*x), dtype=object)
@@ -180,7 +190,7 @@ def make_deltas(pk,lenv,rho,seed,cr):
     #r3 = da.add(r2,kd2)
     r3 = da.blockwise(operator.add, 'ij', r2, 'ij', kd2, 'ij', dtype=object)
 
-    crts = CRT(pk.p,r3,pk.pi)
+    crts = CRT(pk.p_unwrapped,r3,pk.pi,pk.pdiv)
   else: #o
     #crts = [CRT(pk.p,[2*ri+si for ri,si in zip(r[j],pk.verts[j])]) for j in range(lenv)]
     r2 = r.map_blocks((lambda x: 2*x), dtype=object)
@@ -188,7 +198,7 @@ def make_deltas(pk,lenv,rho,seed,cr):
     #r3 = da.add(r2,pk.verts)
     r3 = da.blockwise(operator.add, 'ij', r2, 'ij', pk.verts, 'ij', dtype=object)
 
-    crts = CRT(pk.p,r3,pk.pi)
+    crts = CRT(pk.p_unwrapped,r3,pk.pi,pk.pdiv)
 
   #temp=[mod(Xi,pk.pi) for Xi in pr]
   #delta=[te+(ei*pk.pi)-crti for te,ei,crti in zip(temp,E,crts)] #changed from paper
@@ -239,6 +249,21 @@ def make_u_front(pk,seed):
     u[v] = nu
 
   return u[:pk.l]
+
+def read_primes(key,el):
+  plist = []
+  if (el==0): #eta
+    s_type = "eta"
+    
+  elif (el==1):  #lam
+    s_type = "lam"
+
+  with open((s_type + str(key)), "r") as prime_file:
+    lines = prime_file.readlines()
+    for p in lines:
+      plist.append(int(p))
+
+  return plist
 
 
 class Pk(object):
@@ -312,16 +337,28 @@ class Pk(object):
 
     self.rhoi = self.rho # + self.lam
     self.alphai = self.alpha#??
-    
+
+    #self.p_unwrapped = read_primes(key_size,0)
+    #lam_prime_list = read_primes(key_size,1)
+
     self.p_unwrapped = [random_prime(2**(self.eta-1), 2**self.eta) for i in range(self.l)]
     self.p = da.from_array(self.p_unwrapped, chunks=1).persist() #fix TODO ?????
     #self.pi = reduce((lambda x, y: x * y), self.p) #product of p
-    self.pi = da.prod(self.p).compute()
+    pi_wrapped = da.prod(self.p)
+    self.pi = pi_wrapped.compute()
+
+    prod_array0 = da.broadcast_to(pi_wrapped, (self.l,))#expand pi
+    prod_array1 = da.blockwise(operator.floordiv, 'i', prod_array0, 'i', self.p, 'i', dtype=object) #1d
+    self.pdiv = prod_array1.compute()
 
     self.q0 = (2**self.gam)
+    i = 0
     while (self.q0 > (2**self.gam)//self.pi):
       q0prime1 = delayed(random_prime)(0, 2**(self.lam**2))
       q0prime2 = delayed(random_prime)(0, 2**(self.lam**2))
+      #q0prime1 = lam_prime_list[i]
+      #q0prime2 = lam_prime_list[i+1]
+      i = i + 2
       self.q0 = (q0prime1*q0prime2).compute()
 
     self.x0=self.pi*self.q0
@@ -375,11 +412,14 @@ class Pk(object):
     self.o_deltas = make_deltas(self,self.Theta,self.rho,self.o_seed,3).persist()
    
   def encrypt(self,m): #vector in {0,1}^l
-    #b = [delayed(random_element)(-2**self.alpha,2**self.alpha) for i in range(self.tau)]
-    #bi= [delayed(random_element)(-2**self.alphai,2**self.alphai) for i in range(self.l)]
+    b0 = [delayed(random_element)(-2**self.alpha,2**self.alpha) for i in range(self.tau)]
+    bi0= [delayed(random_element)(-2**self.alphai,2**self.alphai) for i in range(self.l)]
 
-    b = da.from_array([random_element(-2**self.alpha,2**self.alpha) for i in range(self.tau)], chunks=1)
-    bi = da.from_array([random_element(-2**self.alphai,2**self.alphai) for i in range(self.l)], chunks=1)
+    b1 = dask.compute(*b0)
+    bi1 = dask.compute(*bi0)
+
+    b = da.from_array(b1, chunks=1)
+    bi = da.from_array(bi1, chunks=1)
 
     #x = [c-d for c,d in zip(make_pri(self.x0,self.tau,self.x_seed),self.x_deltas)]
     #xi= [c-d for c,d in zip(make_pri(self.x0,self.l,self.xi_seed),self.xi_deltas)]
@@ -490,5 +530,3 @@ class Pk(object):
     final.visualize(filename='2halfRecrypt.svg')
 
     return final.compute()
-
-

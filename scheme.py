@@ -42,7 +42,6 @@ def random_prime(a,b):
 
 @dask.delayed
 def sumBinary(a,b):
-  "Computes the sum of the binary vectors a and b, modulo 2^n where n is the length of the vectors a and b"
   c=[a[0]+b[0]]
   carry=a[0]*b[0]
 
@@ -53,6 +52,10 @@ def sumBinary(a,b):
   
   c.append(a[-1]+b[-1]+carry)
   return c
+
+@dask.delayed
+def arraymult(c,a):
+  return [c*int(xi) for xi in a]
 
 @dask.delayed
 def frac1(u,k,c):
@@ -68,13 +71,10 @@ def round3(z):
 
 @dask.delayed
 def toBinary(x,l):
-  "Converts a positive integer x into binary with l digits"
   if (x==32): return np.array([0]*l)
-
   return np.array(digits(x+2**l)[:-1])
 
-def digits(x): #always binary
-
+def digits(x):
   le = list('{0:0b}'.format(x))
   le.reverse()
   return le
@@ -222,9 +222,7 @@ def kd(i,j):
   else:
     return 0
 
-@dask.delayed
-def arraymult(c,a):
-  return [c*int(xi) for xi in a]
+
 
 class Ciphertext(object):
   def __init__(self,val_,pk_):
@@ -432,16 +430,18 @@ class Pk(object):
     b = da.from_array(b1, chunks=self.chunks)
     bi = da.from_array(bi1, chunks=self.chunks)
 
-    x = da.blockwise(operator.sub, 'i', (da.from_array(self.rgen.make_pri(self.x0,self.tau,self.x_seed), chunks=self.chunks)), 'i', self.x_deltas, 'i', dtype=object) 
-    xi = da.blockwise(operator.sub, 'i', (da.from_array(self.rgen.make_pri(self.x0,self.l,self.xi_seed), chunks=self.chunks)), 'i', self.xi_deltas, 'i', dtype=object) 
-    ii = da.blockwise(operator.sub, 'i', (da.from_array(self.rgen.make_pri(self.x0,self.l,self.ii_seed), chunks=self.chunks)), 'i', self.ii_deltas, 'i', dtype=object) 
+    x = da.blockwise(operator.sub, 'i', (da.from_array(self.rgen.make_pri(self.x0,self.tau,self.x_seed), \
+      chunks=self.chunks)), 'i', self.x_deltas, 'i', dtype=object) 
+    xi = da.blockwise(operator.sub, 'i', (da.from_array(self.rgen.make_pri(self.x0,self.l,self.xi_seed), \
+      chunks=self.chunks)), 'i', self.xi_deltas, 'i', dtype=object) 
+    ii = da.blockwise(operator.sub, 'i', (da.from_array(self.rgen.make_pri(self.x0,self.l,self.ii_seed), \
+      chunks=self.chunks)), 'i', self.ii_deltas, 'i', dtype=object) 
    
     m_xi = da.blockwise(operator.mul, 'i', (da.from_array(m, chunks=self.chunks)), 'i', xi, 'i', dtype=object)
     bi_ii = da.blockwise(operator.mul, 'i', bi, 'i', ii, 'i', dtype=object) 
     b_x = da.blockwise(operator.mul, 'i', b, 'i', x, 'i', dtype=object) 
 
     big = da.sum(da.concatenate([m_xi, bi_ii, b_x]))
-    #big.visualize(filename='enc.svg')
 
     final = modNear(big.compute(),self.x0)
 
@@ -474,15 +474,10 @@ class Pk(object):
 
     #"expand"
     y = [frac1(ui,self.kap,c) for ui in u]
-    z = [frac2(yi) for yi in y]#adjust bits of precision
+    z = [frac2(yi) for yi in y]
     z1 = [round3(zi) for zi in z]
-    zbin = [toBinary(zi,self.n+1) for zi in z1] #delayed call
-    
-    dask.compute(*y)
-    dask.compute(*z)
-    dask.compute(*z1)
-    dask.compute(*zbin)
-    
+    zbin = [toBinary(zi,self.n+1) for zi in z1]
+
     #get o
     
     o = da.blockwise(operator.sub, 'i', (da.from_array(self.rgen.make_pri(self.x0,self.Theta,self.o_seed), chunks=self.chunks)), 'i', self.o_deltas, 'i', dtype=object) #TODO check?
@@ -491,6 +486,7 @@ class Pk(object):
     #zarr = da.from_array(zcom, chunks=1)
 
     o_comp = dask.compute(*o1)
+    dask.visualize(*zbin, filename='ref.svg')
     z_comp = dask.compute(*zbin)
     
     #li = da.blockwise(operator.mul, 'ij', new_o, 'ij', zarr, 'ij', dtype=object)
@@ -505,6 +501,5 @@ class Pk(object):
     rounded = Q_adds[-1] + Q_adds[-2] #"round"
  
     final = rounded + (c & 1)
-    #final.visualize(filename='2halfRecrypt.svg')
 
     return final.compute()

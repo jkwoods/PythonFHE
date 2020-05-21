@@ -85,10 +85,6 @@ def mul_inv(a, b):
     return x1
 
 def CRT(n, a, prod, prod_div_array): #chinese remiander thm   #n = 1 d - array, a = 2 d rand array 2b split, should return 1-day array
-  print(len(n))
-  print(len(a))
-  print(len(a[0]))
-  print(len(prod_div_array))
 
   #mul_array = n.map_blocks((lambda ni: mul_inv((prod // ni), ni) * (prod // ni)), dtype=object) #1d
   mul_array = []

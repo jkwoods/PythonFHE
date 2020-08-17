@@ -387,11 +387,11 @@ class Pk(object):
     bi_ii = [bij*iij for bij,iij in zip(bi,ii)]
     b_x = [bj*xj for bj,xj in zip(b,x)]
 
-    big = sum(m_xi) + sum(bi_ii) + sum(b_x)
+    big_sum = sum(m_xi) + sum(bi_ii) + sum(b_x)
 
-    final = modNear(big,self.x0)
+    c = modNear(big_sum,self.x0)
 
-    return final
+    return c
 
   def decrypt(self,c):
     return [int(mod(modNear(c,self.p[i]),2)) for i in range(self.l)]

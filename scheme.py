@@ -388,9 +388,7 @@ class Pk(object):
     b_x = [bj*xj for bj,xj in zip(b,x)]
 
     big_sum = sum(m_xi) + sum(bi_ii) + sum(b_x)
-
     c = modNear(big_sum,self.x0)
-
     return c
 
   def decrypt(self,c):
